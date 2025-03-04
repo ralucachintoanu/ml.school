@@ -6,7 +6,7 @@ from io import StringIO
 from pathlib import Path
 
 import pandas as pd
-from metaflow import IncludeFile, current
+from metaflow import IncludeFile, current, Parameter
 
 PYTHON = "3.12.8"
 
@@ -25,23 +25,35 @@ class DatasetMixin:
     a dataset.
     """
 
-    dataset = IncludeFile(
-        "dataset",
+    dataset_file = IncludeFile(
+        "dataset_file",
         is_text=True,
         help="Dataset that will be used to train the model.",
         default="data/penguins.csv",
     )
 
+    dataset_folder = Parameter(
+        "dataset_folder",
+        help="Folder where the dataset is stored.",
+        default="data",
+    )
+
     def load_dataset(self):
         """Load and prepare the dataset."""
         import numpy as np
+        import pyarrow.dataset as ds
 
-        # The raw data is passed as a string, so we need to convert it into a DataFrame.
-        data = pd.read_csv(StringIO(self.dataset))
+        if not self.dataset_folder:
+            # The raw data is passed as a string, so we need to convert it into a DataFrame.
+            data = pd.read_csv(StringIO(self.dataset_file))
+        else:
+            pyarrow_dataset = ds.dataset(self.dataset_folder, format="csv")
+            data = pyarrow_dataset.to_table().to_pandas()
 
         # Replace extraneous values in the sex column with NaN. We can handle missing
         # values later in the pipeline.
         data["sex"] = data["sex"].replace(".", np.nan)
+        data["sex"] = data["sex"].replace("NA", np.nan)
 
         # We want to shuffle the dataset. For reproducibility, we can fix the seed value
         # when running in development mode. When running in production mode, we can use
