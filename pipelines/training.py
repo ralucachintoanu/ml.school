@@ -37,6 +37,7 @@ configure_logging()
         "tensorflow",
         "boto3",
         "mlflow",
+        "seaborn",
     ),
 )
 class Training(FlowSpec, DatasetMixin):
@@ -214,6 +215,7 @@ class Training(FlowSpec, DatasetMixin):
             "KERAS_BACKEND": os.getenv("KERAS_BACKEND", "tensorflow"),
         },
     )
+    @card(id="confusion_matrix_card")
     @step
     def evaluate_fold(self):
         """Evaluate the model we created as part of the cross-validation process.
@@ -222,6 +224,8 @@ class Training(FlowSpec, DatasetMixin):
         the model using the test data associated with the current fold.
         """
         import mlflow
+        import numpy as np
+        from metaflow.cards import Image
 
         logging.info("Evaluating fold %d...", self.fold)
         mlflow.set_tracking_uri(self.mlflow_tracking_uri)
@@ -250,9 +254,32 @@ class Training(FlowSpec, DatasetMixin):
             run_id=self.mlflow_fold_run_id,
         )
 
+        # Compute the confusion matrix and display it as a Metaflow card.
+        y_pred = self.model.predict(self.x_test)
+        if y_pred.ndim > 1 and y_pred.shape[1] > 1:
+            y_pred = np.argmax(y_pred, axis=1)
+        else:
+            y_pred = (y_pred > 0.5).astype(int)
+        fig = self._confusion_matrix(self.y_test, y_pred)
+        current.card.append(Image.from_matplotlib(fig))
+
         # When we finish evaluating the models in the cross-validation process, we want
         # to average the scores to determine the overall model performance.
         self.next(self.average_scores)
+
+    def _confusion_matrix(self, y_test, y_pred):
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+        from sklearn.metrics import confusion_matrix
+
+        cm = confusion_matrix(y_test, y_pred)
+        fig, ax = plt.subplots(figsize=(4, 4))
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Greens", ax=ax)
+
+        ax.set_xlabel("Predicted")
+        ax.set_ylabel("Actual")
+        ax.set_title("Confusion Matrix")
+        return fig
 
     @card
     @step
