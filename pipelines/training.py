@@ -226,6 +226,7 @@ class Training(FlowSpec, DatasetMixin):
         import mlflow
         import numpy as np
         from metaflow.cards import Image
+        from sklearn.metrics import precision_score, recall_score
 
         logging.info("Evaluating fold %d...", self.fold)
         mlflow.set_tracking_uri(self.mlflow_tracking_uri)
@@ -237,11 +238,23 @@ class Training(FlowSpec, DatasetMixin):
             verbose=0,
         )
 
+        # Let's also compute average precision and recall scores.
+        y_pred = self.model.predict(self.x_test)
+        if y_pred.ndim > 1 and y_pred.shape[1] > 1:
+            y_pred = np.argmax(y_pred, axis=1)
+        else:
+            y_pred = (y_pred > 0.5).astype(int)
+        self.test_precision = precision_score(self.y_test, y_pred, average="weighted")
+        self.test_recall = recall_score(self.y_test, y_pred, average="weighted")
+
         logging.info(
-            "Fold %d - test_loss: %f - test_accuracy: %f",
+            "Fold %d - test_loss: %f - test_accuracy: %f - test_precision: %f - "
+            "test_recall: %f",
             self.fold,
             self.test_loss,
             self.test_accuracy,
+            self.test_precision,
+            self.test_recall,
         )
 
         # Let's track the evaluation metrics under the nested MLflow run corresponding
@@ -250,16 +263,13 @@ class Training(FlowSpec, DatasetMixin):
             {
                 "test_loss": self.test_loss,
                 "test_accuracy": self.test_accuracy,
+                "test_precision": self.test_precision,
+                "test_recall": self.test_recall,
             },
             run_id=self.mlflow_fold_run_id,
         )
 
         # Compute the confusion matrix and display it as a Metaflow card.
-        y_pred = self.model.predict(self.x_test)
-        if y_pred.ndim > 1 and y_pred.shape[1] > 1:
-            y_pred = np.argmax(y_pred, axis=1)
-        else:
-            y_pred = (y_pred > 0.5).astype(int)
         fig = self._confusion_matrix(self.y_test, y_pred)
         current.card.append(Image.from_matplotlib(fig))
 
@@ -297,12 +307,17 @@ class Training(FlowSpec, DatasetMixin):
 
         # Let's calculate the mean and standard deviation of the accuracy and loss from
         # all the cross-validation folds.
-        metrics = [[i.test_accuracy, i.test_loss] for i in inputs]
-        self.test_accuracy, self.test_loss = np.mean(metrics, axis=0)
-        self.test_accuracy_std, self.test_loss_std = np.std(metrics, axis=0)
+        metrics = [
+            [i.test_accuracy, i.test_loss, i.test_precision, i.test_recall]
+            for i in inputs
+        ]
+        self.test_accuracy, self.test_loss, self.test_precision, self.test_recall = np.mean(metrics, axis=0)
+        self.test_accuracy_std, self.test_loss_std, self.test_precision_std, self.test_recall_std = np.std(metrics, axis=0)
 
         logging.info("Accuracy: %f ±%f", self.test_accuracy, self.test_accuracy_std)
         logging.info("Loss: %f ±%f", self.test_loss, self.test_loss_std)
+        logging.info("Precision: %f ±%f", self.test_precision, self.test_precision_std)
+        logging.info("Recall: %f ±%f", self.test_recall, self.test_recall_std)
 
         # Let's log the model metrics on the parent run.
         mlflow.log_metrics(
@@ -311,6 +326,10 @@ class Training(FlowSpec, DatasetMixin):
                 "test_accuracy_std": self.test_accuracy_std,
                 "test_loss": self.test_loss,
                 "test_loss_std": self.test_loss_std,
+                "test_precision": self.test_precision,
+                "test_precision_std": self.test_precision_std,
+                "test_recall": self.test_recall,
+                "test_recall_std": self.test_recall_std,
             },
             run_id=self.mlflow_run_id,
         )
