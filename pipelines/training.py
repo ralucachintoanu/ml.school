@@ -415,9 +415,10 @@ class Training(FlowSpec, DatasetMixin):
         # branches to make them available here.
         self.merge_artifacts(inputs)
 
-        # We only want to register the model if its accuracy is above the
-        # `accuracy_threshold` parameter.
-        if self.test_accuracy >= self.accuracy_threshold:
+        # We only want to register the model if its accuracy is above the previously
+        # registered model
+        prev_accuracy = self._previous_registered_model_metadata()
+        if prev_accuracy is None or self.test_accuracy > prev_accuracy:
             self.registered = True
             logging.info("Registering model...")
 
@@ -450,14 +451,33 @@ class Training(FlowSpec, DatasetMixin):
         else:
             self.registered = False
             logging.info(
-                "The accuracy of the model (%.2f) is lower than the accuracy threshold "
-                "(%.2f). Skipping model registration.",
+                "The accuracy of the model (%.4f) is lower than the accuracy of the "
+                "previous model (%.4f). Skipping model registration.",
                 self.test_accuracy,
-                self.accuracy_threshold,
+                prev_accuracy,
             )
 
         # Let's now move to the final step of the pipeline.
         self.next(self.end)
+
+    def _previous_registered_model_metadata(self):
+        """Return the accuracy of the previous registered model."""
+        import mlflow
+
+        client = mlflow.tracking.MlflowClient(self.mlflow_tracking_uri)
+        versions = client.search_model_versions("name='penguins'")
+        if not versions:
+            logging.info("No registered model versions found.")
+            latest_version = None
+            latest_accuracy = None
+        else:
+            latest_version = max(versions, key=lambda v: int(v.version))
+            logging.info("Previous model version: %s", latest_version.version)
+            latest_metrics = client.get_run(latest_version.run_id).data.metrics
+            latest_accuracy = latest_metrics.get("test_accuracy", None)
+            logging.info("Previous model accuracy: %s", latest_accuracy)
+
+        return latest_accuracy
 
     @step
     def end(self):
